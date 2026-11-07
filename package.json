@@ -1,0 +1,9 @@
+{
+  "name": "amlbg",
+  "version": "1.0.0",
+  "description": "Reverse-engineered Apple Music animated backdrops, ported to JavaScript",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./amlbg.js",
+  "exports": "./amlbg.js"
+}

@@ -1,0 +1,173 @@
+/* SPDX-License-Identifier: AGPL-3.0-only
+ * amlbg — Reverse-engineered Apple Music animated backdrops, ported to JavaScript.
+ */
+
+const FULLSCREEN_VS = [
+    '#version 300 es',
+    'out vec2 vUv;',
+    'void main() {',
+    '  vec2 p[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));',
+    '  vec2 position = p[gl_VertexID];',
+    '  vUv = position * 0.5 + 0.5;',
+    '  gl_Position = vec4(position, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  const BLEND_FS = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uPrevious;',
+    'uniform sampler2D uCurrent;',
+    'uniform float uMix;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  vec4 a = texture(uPrevious, vUv);',
+    '  vec4 b = texture(uCurrent, vUv);',
+    '  outColor = mix(a, b, uMix);',
+    '}'
+  ].join('\n');
+
+  const ROTATE_VS = [
+    '#version 300 es',
+    'uniform mat4 uModels[3];',
+    'uniform float uBlackScrim;',
+    'uniform float uInstanceStep;',
+    'out vec2 vUv;',
+    'out float vScrim;',
+    'void main() {',
+    '  vec2 quad[4] = vec2[4](vec2(-1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0), vec2(1.0, -1.0));',
+    '  vec2 uvs[4] = vec2[4](vec2(0.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(1.0, 0.0));',
+    '  uint order[6] = uint[6](0u, 1u, 2u, 0u, 2u, 3u);',
+    '  int k = int(order[gl_VertexID]);',
+    '  gl_Position = uModels[gl_InstanceID] * vec4(quad[k], 0.0, 1.0);',
+    '  vUv = uvs[k];',
+    '  vScrim = uBlackScrim + float(gl_InstanceID) * uInstanceStep;',
+    '}'
+  ].join('\n');
+
+  const ROTATE_FS = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUv;',
+    'in float vScrim;',
+    'uniform sampler2D uArtwork;',
+    'uniform float uContrast;',
+    'uniform float uSaturation;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  vec3 c = texture(uArtwork, vUv).rgb;',
+    '  float scrim = vScrim;',
+    '  c = mix(c, vec3(0.0), scrim);',
+    '  c = (c - 0.5) * uContrast + 0.5;',
+    '  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));',
+    '  c = mix(vec3(l), c, uSaturation);',
+    '  outColor = vec4(c, 1.0);',
+    '}'
+  ].join('\n');
+
+  const BLUR_FS = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uTexture;',
+    'uniform vec2 uTexel;',
+    'uniform vec2 uDir;',
+    'uniform float uSigma;',
+    'uniform int uRadius;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  float sigma2 = uSigma * uSigma;',
+    '  vec4 sum = texture(uTexture, vUv);',
+    '  float total = 1.0;',
+    '  for (int i = 1; i <= uRadius; i++) {',
+    '    float fi = float(i);',
+    '    float w = exp(-0.5 * fi * fi / sigma2);',
+    '    vec2 delta = uDir * uTexel * fi;',
+    '    vec2 uvA = vUv + delta;',
+    '    vec2 uvB = vUv - delta;',
+    '    vec4 s = vec4(0.0);',
+    '    if (all(greaterThanEqual(uvA, vec2(0.0))) && all(lessThanEqual(uvA, vec2(1.0)))) s += texture(uTexture, uvA);',
+    '    if (all(greaterThanEqual(uvB, vec2(0.0))) && all(lessThanEqual(uvB, vec2(1.0)))) s += texture(uTexture, uvB);',
+    '    sum += s * w;',
+    '    total += 2.0 * w;',
+    '  }',
+    '  outColor = sum / total;',
+    '}'
+  ].join('\n');
+
+  const PINCH_VS = [
+    '#version 300 es',
+    'layout(location = 0) in vec2 aUv;',
+    'layout(location = 1) in vec2 aFrom;',
+    'layout(location = 2) in vec2 aTo;',
+    'uniform float uPinchMix;',
+    'uniform float uWarpMix;',
+    'out vec2 vUv;',
+    'void main() {',
+    '  vec2 base = (aUv - 0.5) * (2.0 + 0.5 * (1.0 - uPinchMix));',
+    '  vec2 warped = mix(aFrom, aTo, uWarpMix);',
+    '  vec2 position = mix(base, warped, uPinchMix);',
+    '  vUv = aUv;',
+    '  gl_Position = vec4(position, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  const PINCH_FS = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uBlurred;',
+    'uniform float uWhiteScrim;',
+    'uniform float uBrightness;',
+    'uniform float uGrade;',
+    'uniform float uDitherStep;',
+    'out vec4 outColor;',
+    'float gradeWindow(float h, float centre, float halfWidth) {',
+    '  float d = abs(h - centre);',
+    '  d = mod(d, 360.0);',
+    '  d = min(d, 360.0 - d);',
+    '  return d < halfWidth ? 0.5 * (1.0 + cos(3.141592653589793 * d / halfWidth)) : 0.0;',
+    '}',
+    'vec3 grade(vec3 c) {',
+    '  float mx = max(c.r, max(c.g, c.b));',
+    '  float mn = min(c.r, min(c.g, c.b));',
+    '  float chroma = mx - mn;',
+    '  if (chroma < 1e-4 || mx < 1e-4) return c;',
+    '  float s = chroma / mx;',
+    '  float h;',
+    '  if (mx == c.r) h = mod((c.g - c.b) / chroma + 6.0, 6.0);',
+    '  else if (mx == c.g) h = (c.b - c.r) / chroma + 2.0;',
+    '  else h = (c.r - c.g) / chroma + 4.0;',
+    '  h *= 60.0;',
+    '  float wr = gradeWindow(h, 0.0, 56.0);',
+    '  float wb = gradeWindow(h, 241.0, 57.0);',
+    '  float value = mx * (1.0 - s * (0.336 * wr + 0.312 * wb));',
+    '  float sat = s * (1.0 - (1.0 - 0.828 * s) * (0.473 * wr + 0.397 * wb));',
+    '  vec3 t = (c - mn) / chroma;',
+    '  return value * (1.0 - sat * (1.0 - t));',
+    '}',
+    'float dither(vec2 position, float step) {',
+    '  uvec2 p = uvec2(position);',
+    '  uint h = p.x * 0x8da6b343u ^ p.y * 0xd8163841u;',
+    '  h ^= h >> 16;',
+    '  h *= 0x7feb352du;',
+    '  h ^= h >> 15;',
+    '  h *= 0x846ca68bu;',
+    '  h ^= h >> 16;',
+    '  float a = float(h & 0xffffu) / 65535.0;',
+    '  float b = float(h >> 16) / 65535.0;',
+    '  return (a + b - 1.0) * step;',
+    '}',
+    'void main() {',
+    '  vec4 s = texture(uBlurred, vUv);',
+    '  vec3 c = s.rgb / max(s.a, 1e-3);',
+    '  c = mix(c, vec3(1.0), uWhiteScrim);',
+    '  if (uGrade > 0.5) c = grade(c);',
+    '  c *= uBrightness;',
+    '  c += dither(gl_FragCoord.xy, uDitherStep);',
+    '  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);',
+    '}'
+  ].join('\n');
+
+export { FULLSCREEN_VS, BLEND_FS, ROTATE_VS, ROTATE_FS, BLUR_FS, PINCH_VS, PINCH_FS };
